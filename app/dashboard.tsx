@@ -52,19 +52,19 @@ function calculateRtm(data: Dataset | undefined) {
   const hasDuration = durationRows.some(v => v !== null);
   const isAnswered = (row: Row, i: number) => {
     if (answeredCountCol) return (numberValue(row[answeredCountCol]) ?? 0) > 0;
-    if (statusCol) return /answer|connect|complete|handled|success/i.test(String(row[statusCol] ?? ""));
+    if (statusCol) { const status = String(row[statusCol] ?? ""); if (/no answer|unanswered|missed|abandon|busy|failed|cancel/i.test(status)) return false; return /answer|connect|complete|handled|success/i.test(status); }
     return durationRows[i] !== null && (durationRows[i] ?? 0) > 0;
   };
   const calls = callCountCol ? data.rows.reduce((n,r)=>n+(numberValue(r[callCountCol]) ?? 0),0) : data.rows.length;
   const answered = data.rows.reduce((n,r,i)=>n+(isAnswered(r,i) ? (answeredCountCol ? numberValue(r[answeredCountCol]) ?? 0 : 1) : 0),0);
-  const seconds = durationRows.reduce((n,v)=>n+(v ?? 0),0);
+  const seconds = durationRows.reduce((n,v,i)=>n+(isAnswered(data.rows[i],i) ? (v ?? 0) : 0),0);
   const grouped = new Map<string, AgentMetric>();
   data.rows.forEach((row,i) => {
     const agent = agentCol ? safeName(row[agentCol]) || "Unassigned" : "All agents";
     const item = grouped.get(agent) ?? {agent,calls:0,answered:0,seconds:0,aht:null};
     item.calls += callCountCol ? numberValue(row[callCountCol]) ?? 0 : 1;
     if (isAnswered(row,i)) item.answered += answeredCountCol ? numberValue(row[answeredCountCol]) ?? 0 : 1;
-    item.seconds += durationRows[i] ?? 0;
+    if (isAnswered(row,i)) item.seconds += durationRows[i] ?? 0;
     grouped.set(agent,item);
   });
   const agents = [...grouped.values()].map(a=>({...a,aht:a.answered ? a.seconds/a.answered : null})).sort((a,b)=>b.calls-a.calls);
