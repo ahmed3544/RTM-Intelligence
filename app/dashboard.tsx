@@ -382,7 +382,18 @@ export default function Home() {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error("Google sign-in failed:", error);
-      setNotice("Google sign-in failed. Enable Google in Firebase Authentication and add this website to Authorized domains.");
+      const authError = error as { code?: string; message?: string };
+      const code = authError?.code || "auth/unknown";
+      const friendly: Record<string,string> = {
+        "auth/unauthorized-domain": "This website is not authorized in Firebase. Add rtm-intelligence-flax.vercel.app under Authentication → Settings → Authorized domains.",
+        "auth/operation-not-allowed": "Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.",
+        "auth/popup-blocked": "The browser blocked the Google sign-in popup. Allow popups for this website and try again.",
+        "auth/popup-closed-by-user": "The Google sign-in window was closed before finishing. Try again.",
+        "auth/cancelled-popup-request": "A previous Google sign-in popup is still active. Close it and try again.",
+        "auth/network-request-failed": "Network request failed. Check your internet connection or browser extensions and try again.",
+        "auth/invalid-api-key": "The Firebase API key is invalid. Check the Firebase web app configuration."
+      };
+      setNotice((friendly[code] || "Google sign-in failed: " + (authError?.message || "Unknown Firebase error")) + " [" + code + "]");
     }
   }
 
