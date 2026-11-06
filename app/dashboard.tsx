@@ -201,7 +201,8 @@ export default function Home() {
       if (nextUser) setAuthBusy(false);
     }, error => {
       console.error("Firebase auth state failed:", error);
-      setNotice("Could not restore your Google sign-in session: " + (error.message || error.code));
+      const authError = error as { code?: string; message?: string };
+      setNotice("Could not restore your Google sign-in session: " + (authError.message || authError.code || "Unknown error"));
       setAuthReady(true);
       setAuthBusy(false);
     });
