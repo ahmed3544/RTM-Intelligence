@@ -415,7 +415,7 @@ export default function Home() {
 
   const title = section;
   if (!authReady) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><h1>RTM Intelligence</h1><p>Connecting to your secure cloud workspace…</p></section></main>;
-  if (!user) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><span className="eyebrow">CLOUD WORKSPACE</span><h1>RTM Intelligence</h1><p>Sign in to securely access your uploaded reports from any device.</p><button className="primary auth-button" type="button" onClick={loginWithGoogle} disabled={authBusy}><ArrowUpRight size={16}/> {authBusy ? "Connecting to Google…" : "Continue with Google"}</button><small>Your files are private to your Google account.</small></section></main>;
+  if (!user) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><span className="eyebrow">CLOUD WORKSPACE</span><h1>RTM Intelligence</h1><p>Sign in to securely access your uploaded reports from any device.</p>{notice && <div className="notice" role="alert"><AlertCircle size={16}/><span>{notice}</span></div>}<button className="primary auth-button" type="button" onClick={loginWithGoogle} disabled={authBusy}><ArrowUpRight size={16}/> {authBusy ? "Connecting to Google…" : "Continue with Google"}</button><small>Your files are private to your Google account.</small></section></main>;
   return (
     <main className={dark ? "shell dark-mode" : "shell"}>
       <aside className="sidebar">
