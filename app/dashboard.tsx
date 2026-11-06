@@ -166,6 +166,7 @@ export default function Home() {
   const [reports, setReports] = useState<{name:string; date:string; rows:number}[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploadStage, setUploadStage] = useState("");
   const current = datasets.find(d => d.id === selected) ?? datasets[0];
   const [previewPage, setPreviewPage] = useState(0);
   const [dark, setDark] = useState(false);
@@ -263,12 +264,18 @@ export default function Home() {
   const pageRows = filteredRows.slice(previewPage * 25, previewPage * 25 + 25);
 
   async function handleFiles(files: FileList | File[]) {
-    setBusy(true); setNotice("");
+    setBusy(true);
+    setUploadStage("Reading your file…");
+    setNotice("");
     try {
       const added: Dataset[] = [];
       for (const file of Array.from(files)) {
         const ext = file.name.split(".").pop()?.toLowerCase();
-        if (!["xlsx", "xls", "csv"].includes(ext || "")) { setNotice("Unsupported file: " + file.name); continue; }
+        if (!["xlsx", "xls", "csv"].includes(ext || "")) {
+          setNotice("Unsupported file: " + file.name);
+          continue;
+        }
+        setUploadStage("Reading " + file.name + "…");
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
         for (const sheetName of workbook.SheetNames) {
@@ -287,28 +294,51 @@ export default function Home() {
             });
             return item;
           });
-          if (!rows.length) continue;
-          added.push({ id: crypto.randomUUID(), name: file.name, sheet: sheetName, rows, columns: headers, uploadedAt: new Date().toLocaleString() });
+          if (rows.length) added.push({ id: crypto.randomUUID(), name: file.name, sheet: sheetName, rows, columns: headers, uploadedAt: new Date().toLocaleString() });
         }
       }
-      if (added.length) {
-        const synced: Dataset[] = [];
-        let cloudFailed = false;
-        for (const item of added) {
-          try { synced.push(await syncDatasetToCloud(user!.uid, item)); }
-          catch (error) { console.error("Cloud upload failed:", error); synced.push(item); cloudFailed = true; }
+      if (!added.length) {
+        setNotice("No tabular data found. Make sure the first non-empty row contains column headers.");
+        return;
+      }
+
+      // Make parsed data visible and persist it locally before attempting cloud sync.
+      setDatasets(prev => [...prev, ...added]);
+      setSelected(added[0].id);
+      setSection("Data uploads");
+      setPreviewPage(0);
+      setNotice(`Read ${added.length} sheet(s). Saving a local copy and syncing to Firebase…`);
+
+      if (!user) {
+        setNotice(`Imported ${added.length} sheet(s) locally, but you're not signed in. Sign in and retry cloud sync.`);
+        return;
+      }
+
+      let cloudFailed = false;
+      for (const item of added) {
+        setUploadStage("Saving " + item.name + " to Firebase…");
+        try {
+          await Promise.race([
+            syncDatasetToCloud(user.uid, item),
+            new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("Cloud upload timed out after 30 seconds")), 30000))
+          ]);
+        } catch (error) {
+          console.error("Cloud upload failed:", error);
+          cloudFailed = true;
         }
-        setDatasets(prev => [...prev, ...synced]);
-        setSelected(synced[0].id);
-        setSection("Data uploads");
-        setPreviewPage(0);
-        setNotice(cloudFailed
-          ? `Imported ${added.length} sheet(s), but cloud sync failed for one or more. Local copies remain on this device.`
-          : `Imported and saved ${added.length} sheet(s) to Firebase. They will appear on your other signed-in devices.`);
-      } else if (!notice) setNotice("No tabular data found. Make sure the first non-empty row contains column headers.");
-    } catch (e) {
-      setNotice("Could not read this file. Please check that it is a valid Excel or CSV workbook.");
-    } finally { setBusy(false); if (inputRef.current) inputRef.current.value = ""; }
+      }
+      setNotice(cloudFailed
+        ? `Imported ${added.length} sheet(s) locally, but Firebase sync failed or timed out. Your local copy is retained. Check the browser Console for the exact Firebase error.`
+        : `Imported and saved ${added.length} sheet(s) to Firebase. They will appear on your other signed-in devices.`);
+    } catch (error) {
+      console.error("File import failed:", error);
+      const detail = error instanceof Error ? error.message : String(error);
+      setNotice("File import failed: " + detail);
+    } finally {
+      setBusy(false);
+      setUploadStage("");
+      if (inputRef.current) inputRef.current.value = "";
+    }
   }
 
   function exportWorkbook() {
@@ -445,7 +475,7 @@ export default function Home() {
             <article className="stat-card"><div className="stat-icon violet"><Sparkles size={19}/></div><span>Reports generated</span><strong>{reports.length}</strong><small>Current session</small></article>
           </div>
           <div className="content-grid">
-            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? "Reading your file..." : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are uploaded securely to Firebase and available on your other signed-in devices.</small></div></section>
+            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? (uploadStage || "Processing your file…") : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are uploaded securely to Firebase and available on your other signed-in devices.</small></div></section>
             <section className="panel assistant-panel"><div className="panel-heading"><div><h3>Reporting assistant</h3><p>Ask questions about your uploaded data.</p></div><span className="ai-pill"><Sparkles size={13}/> ANALYTICS</span></div><div className="chat-preview"><div className="bot-avatar"><Bot size={18}/></div><div className="chat-bubble"><strong>What would you like to analyze?</strong><p>Try “How many rows?”, “Average AHT”, or “List columns”.</p></div></div><button className="secondary full" onClick={()=>setSection("AI assistant")}>Open assistant <ArrowUpRight size={16}/></button></section>
           </div>
         </>}
