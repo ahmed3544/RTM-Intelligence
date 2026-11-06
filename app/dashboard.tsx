@@ -3,9 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { collection, deleteDoc, doc, getDocs, setDoc } from "firebase/firestore";
+import { deleteObject, getBytes, ref as storageRef, uploadBytes } from "firebase/storage";
+import { auth, db, storage } from "../lib/firebase";
 
 type Row = Record<string, string | number | boolean | null>;
-type Dataset = { id: string; name: string; sheet: string; rows: Row[]; columns: string[]; uploadedAt: string };
+type Dataset = { id: string; name: string; sheet: string; rows: Row[]; columns: string[]; uploadedAt: string; cloudPath?: string };
 type Message = { role: "assistant" | "user"; text: string };
 
 const nav = [
@@ -63,6 +67,25 @@ async function saveDatasetsLocally(items: Dataset[]) {
   });
 }
 
+
+async function syncDatasetToCloud(uid: string, dataset: Dataset): Promise<Dataset> {
+  const path = `users/${uid}/datasets/${dataset.id}.json`;
+  const payload = new Blob([JSON.stringify(dataset)], { type: "application/json" });
+  await uploadBytes(storageRef(storage, path), payload, { contentType: "application/json" });
+  await setDoc(doc(db, "users", uid, "datasets", dataset.id), {
+    id: dataset.id, name: dataset.name, sheet: dataset.sheet,
+    uploadedAt: dataset.uploadedAt, cloudPath: path,
+    rowCount: dataset.rows.length, columnCount: dataset.columns.length,
+  });
+  return { ...dataset, cloudPath: path };
+}
+
+async function deleteCloudDataset(uid: string, dataset: Dataset) {
+  await deleteDoc(doc(db, "users", uid, "datasets", dataset.id));
+  if (dataset.cloudPath) {
+    try { await deleteObject(storageRef(storage, dataset.cloudPath)); } catch { /* Already absent. */ }
+  }
+}
 
 const norm = (v: unknown) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const findColumn = (columns: string[], patterns: RegExp[]) => columns.find(c => patterns.some(p => p.test(norm(c))));
@@ -133,6 +156,9 @@ export default function Home() {
   const current = datasets.find(d => d.id === selected) ?? datasets[0];
   const [previewPage, setPreviewPage] = useState(0);
   const [dark, setDark] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [cloudBusy, setCloudBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -153,6 +179,54 @@ export default function Home() {
     if (!storageReady) return;
     saveDatasetsLocally(datasets).catch(() => setNotice("Could not save data locally. Check browser storage permissions or available space."));
   }, [datasets, storageReady]);
+
+  useEffect(() => onAuthStateChanged(auth, nextUser => {
+    setUser(nextUser);
+    setAuthReady(true);
+  }), []);
+
+  useEffect(() => {
+    if (!authReady || !user || !storageReady) return;
+    let active = true;
+    setCloudBusy(true);
+    (async () => {
+      const snapshot = await getDocs(collection(db, "users", user.uid, "datasets"));
+      const cloudItems: Dataset[] = [];
+      for (const item of snapshot.docs) {
+        const meta = item.data();
+        if (typeof meta.cloudPath !== "string") continue;
+        const bytes = await getBytes(storageRef(storage, meta.cloudPath));
+        const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Dataset;
+        if (parsed && Array.isArray(parsed.rows) && Array.isArray(parsed.columns)) {
+          cloudItems.push({ ...parsed, id: item.id, cloudPath: meta.cloudPath });
+        }
+      }
+      if (!active) return;
+      if (cloudItems.length) {
+        setDatasets(cloudItems);
+        setSelected(cloudItems[0].id);
+        setNotice(`Loaded ${cloudItems.length} sheet(s) from Firebase Cloud Storage.`);
+      } else {
+        const localItems = await readSavedDatasets();
+        if (localItems.length) {
+          const migrated: Dataset[] = [];
+          for (const item of localItems) migrated.push(await syncDatasetToCloud(user.uid, item));
+          if (!active) return;
+          setDatasets(migrated);
+          setSelected(migrated[0]?.id ?? "");
+          setNotice(`Synced ${migrated.length} existing local sheet(s) to your Firebase account.`);
+        } else {
+          setDatasets([]);
+          setNotice("Cloud storage is connected. Uploads will now appear on your other signed-in devices.");
+        }
+      }
+    })().catch(error => {
+      console.error("Firebase restore failed:", error);
+      if (active) setNotice("Could not load cloud files. Check that Firestore and Storage are enabled and their security rules are published.");
+    }).finally(() => { if (active) setCloudBusy(false); });
+    return () => { active = false; };
+  }, [authReady, user, storageReady]);
+
 
 
   const totalRows = datasets.reduce((n, d) => n + d.rows.length, 0);
@@ -194,11 +268,19 @@ export default function Home() {
         }
       }
       if (added.length) {
-        setDatasets(prev => [...prev, ...added]);
-        setSelected(added[0].id);
+        const synced: Dataset[] = [];
+        let cloudFailed = false;
+        for (const item of added) {
+          try { synced.push(await syncDatasetToCloud(user!.uid, item)); }
+          catch (error) { console.error("Cloud upload failed:", error); synced.push(item); cloudFailed = true; }
+        }
+        setDatasets(prev => [...prev, ...synced]);
+        setSelected(synced[0].id);
         setSection("Data uploads");
         setPreviewPage(0);
-        setNotice(`Imported ${added.length} sheet(s) successfully. Data is saved in this browser on this device.`);
+        setNotice(cloudFailed
+          ? `Imported ${added.length} sheet(s), but cloud sync failed for one or more. Local copies remain on this device.`
+          : `Imported and saved ${added.length} sheet(s) to Firebase. They will appear on your other signed-in devices.`);
       } else if (!notice) setNotice("No tabular data found. Make sure the first non-empty row contains column headers.");
     } catch (e) {
       setNotice("Could not read this file. Please check that it is a valid Excel or CSV workbook.");
@@ -258,20 +340,49 @@ export default function Home() {
     setMessages(prev => [...prev, {role:"assistant",text:answer}]);
   }
 
-  function removeDataset(id:string) {
+  async function removeDataset(id:string) {
+    const target = datasets.find(d => d.id === id);
     setDatasets(prev => prev.filter(d=>d.id!==id));
     if (selected===id) setSelected(datasets.find(d=>d.id!==id)?.id ?? "");
-    setNotice("Dataset removed from this session.");
+    if (target && user) {
+      try { await deleteCloudDataset(user.uid, target); setNotice("Dataset deleted from Firebase and this device."); }
+      catch { setNotice("Removed locally, but cloud deletion failed. Please try again."); }
+    } else setNotice("Dataset removed from this device.");
+  }
+
+  async function clearWorkspace() {
+    if (user) {
+      try { await Promise.all(datasets.map(item => deleteCloudDataset(user.uid, item))); }
+      catch { setNotice("Some cloud files could not be deleted. Please retry."); return; }
+    }
+    setDatasets([]);
+    setSelected("");
+    setReports([]);
+    setMessages([{role:"assistant",text:"Workspace cleared. Upload a workbook to begin again."}]);
+    setNotice("Workspace cleared from cloud and this device.");
+  }
+
+  async function loginWithGoogle() {
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Google sign-in failed:", error);
+      setNotice("Google sign-in failed. Enable Google in Firebase Authentication and add this website to Authorized domains.");
+    }
   }
 
   const title = section;
+  if (!authReady) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><h1>RTM Intelligence</h1><p>Connecting to your secure cloud workspace…</p></section></main>;
+  if (!user) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><span className="eyebrow">CLOUD WORKSPACE</span><h1>RTM Intelligence</h1><p>Sign in to securely access your uploaded reports from any device.</p><button className="primary auth-button" onClick={loginWithGoogle}><ArrowUpRight size={16}/> Continue with Google</button><small>Your files are private to your Google account.</small></section></main>;
   return (
     <main className={dark ? "shell dark-mode" : "shell"}>
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Activity size={21}/></span><span>RTM <b>INTELLIGENCE</b></span></div>
         <div className="workspace-label">WORKSPACE</div>
         <nav>{nav.map(({label, icon: Icon}) => <button type="button" className={section===label ? "nav-item active" : "nav-item"} onClick={()=>setSection(label)} key={label}><Icon size={18}/>{label}</button>)}</nav>
-        <div className="sidebar-bottom"><div className="avatar">AM</div><div><strong>Workspace Admin</strong><small>Browser workspace</small></div></div>
+        <div className="sidebar-bottom"><div className="avatar">AM</div><div><strong>Workspace Admin</strong><small>{user.email ?? "Cloud workspace"}</small></div></div>
       </aside>
 
       <section className="main">
@@ -282,12 +393,12 @@ export default function Home() {
         {section==="Overview" && <>
           <div className="welcome"><div><span className="eyebrow light">YOUR DATA. YOUR REPORTS.</span><h2>Turn spreadsheets into<br/><em>clear decisions.</em></h2><p>Upload your Excel files, explore the data, and ask for the report you need.</p><button className="primary" onClick={()=>inputRef.current?.click()}><UploadCloud size={16}/> Upload a workbook</button></div><div className="welcome-art"><div className="art-card"><FileSpreadsheet size={34}/><span>Excel data</span><ArrowUpRight size={17}/></div><div className="art-line"/></div></div>
           <div className="stats">
-            <article className="stat-card"><div className="stat-icon blue"><Files size={19}/></div><span>Uploaded sheets</span><strong>{datasets.length}</strong><small>Saved in this browser</small></article>
+            <article className="stat-card"><div className="stat-icon blue"><Files size={19}/></div><span>Uploaded sheets</span><strong>{datasets.length}</strong><small>Saved in Firebase Cloud</small></article>
             <article className="stat-card"><div className="stat-icon green"><FileSpreadsheet size={19}/></div><span>Data rows analyzed</span><strong>{totalRows.toLocaleString()}</strong><small>Across uploaded sheets</small></article>
             <article className="stat-card"><div className="stat-icon violet"><Sparkles size={19}/></div><span>Reports generated</span><strong>{reports.length}</strong><small>Current session</small></article>
           </div>
           <div className="content-grid">
-            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? "Reading your file..." : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are saved in this browser on this device. Clearing browser site data will remove them.</small></div></section>
+            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? "Reading your file..." : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are uploaded securely to Firebase and available on your other signed-in devices.</small></div></section>
             <section className="panel assistant-panel"><div className="panel-heading"><div><h3>Reporting assistant</h3><p>Ask questions about your uploaded data.</p></div><span className="ai-pill"><Sparkles size={13}/> ANALYTICS</span></div><div className="chat-preview"><div className="bot-avatar"><Bot size={18}/></div><div className="chat-bubble"><strong>What would you like to analyze?</strong><p>Try “How many rows?”, “Average AHT”, or “List columns”.</p></div></div><button className="secondary full" onClick={()=>setSection("AI assistant")}>Open assistant <ArrowUpRight size={16}/></button></section>
           </div>
         </>}
@@ -327,9 +438,9 @@ export default function Home() {
 
         {section==="Reports history" && <section className="panel"><div className="panel-heading"><div><h3>Reports history</h3><p>Create a workbook export or print a report to PDF.</p></div><button className="primary" onClick={makeReport} disabled={!current}><FileText size={16}/> Generate summary</button></div>{reports.length ? <div className="report-list">{reports.map((r,i)=><div className="report-item" key={i}><div className="report-icon"><FileText size={18}/></div><div><b>{r.name}</b><small>{r.date} · {r.rows} rows</small></div><button className="secondary" onClick={()=>window.print()}>Print / Save PDF</button></div>)}</div> : <div className="empty-state"><Clock3 size={32}/><b>No reports generated</b><span>Choose a dataset, then generate a data summary.</span></div>}</section>}
 
-        {section==="Settings" && <section className="panel"><div className="panel-heading"><div><h3>Workspace settings</h3><p>Manage this browser workspace.</p></div></div><div className="settings-row"><div><b>Appearance</b><small>Switch between light and dark workspace.</small></div><button className="secondary" onClick={()=>setDark(v=>!v)}>{dark?"Use light mode":"Use dark mode"}</button></div><div className="settings-row"><div><b>Export all uploaded data</b><small>Download all imported sheets into one Excel workbook.</small></div><button className="secondary" disabled={!datasets.length} onClick={exportAll}><Download size={15}/> Export all</button></div><div className="settings-row"><div><b>Clear current session</b><small>Remove uploaded data and generated report history from this browser session.</small></div><button className="secondary danger-text" disabled={!datasets.length&&!reports.length} onClick={()=>{setDatasets([]);setSelected("");setReports([]);setMessages([{role:"assistant",text:"Session cleared. Upload a workbook to begin again."}]);setNotice("Current session cleared.");}}>Clear workspace</button></div><div className="settings-note"><AlertCircle size={16}/> Uploaded data is saved in this browser using local database storage and restored after refresh. It remains on this device only; clearing site data or using another device will not carry it over. Cloud backup and account login are not configured yet.</div></section>}
+        {section==="Settings" && <section className="panel"><div className="panel-heading"><div><h3>Workspace settings</h3><p>Manage this browser workspace.</p></div></div><div className="settings-row"><div><b>Signed in account</b><small>{user.email ?? user.uid}</small></div><button className="secondary" onClick={()=>signOut(auth)}>Sign out</button></div><div className="settings-row"><div><b>Cloud sync</b><small>{cloudBusy ? "Loading cloud files…" : "Firebase Storage + Firestore connected"}</small></div><span className="ai-pill"><CheckCircle2 size={13}/> {cloudBusy ? "SYNCING" : "CONNECTED"}</span></div><div className="settings-row"><div><b>Appearance</b><small>Switch between light and dark workspace.</small></div><button className="secondary" onClick={()=>setDark(v=>!v)}>{dark?"Use light mode":"Use dark mode"}</button></div><div className="settings-row"><div><b>Export all uploaded data</b><small>Download all imported sheets into one Excel workbook.</small></div><button className="secondary" disabled={!datasets.length} onClick={exportAll}><Download size={15}/> Export all</button></div><div className="settings-row"><div><b>Clear current session</b><small>Remove uploaded data and generated report history from this browser session.</small></div><button className="secondary danger-text" disabled={!datasets.length&&!reports.length} onClick={()=>void clearWorkspace()}>Clear workspace</button></div><div className="settings-note"><AlertCircle size={16}/> Uploaded workbooks are stored as private files in Firebase Storage, with file records in Firestore. Only the signed-in Google account can read or change its files under the included security rules. Local browser storage is retained as a backup.</div></section>}
 
-        <footer>RTM Intelligence <span>Data is saved locally on this device · English interface</span></footer>
+        <footer>RTM Intelligence <span>Firebase cloud workspace · Signed in as {user.email ?? "Google user"}</span></footer>
       </section>
       <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" multiple hidden onChange={e=>{if(e.target.files)void handleFiles(e.target.files);}}/>
     </main>
