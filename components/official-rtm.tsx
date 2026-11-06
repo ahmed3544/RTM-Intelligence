@@ -61,8 +61,9 @@ export default function OfficialRtm({ datasets }: { datasets: DataSet[] }) {
       const status = String(statusCol ? r[statusCol] : "").trim().toUpperCase();
       const isAns = status === "ANSWERED" || status === "ANSWER";
       const isAbn = status === "ABANDONED" || status === "ABANDON";
-      const isFail = ["FAILED","TERMINATED","TERMINATE"].includes(status);
+      const isFail = ["FAILED","TERMINATED","TERMINATE","NO ANSWER","BUSY","CANCELLED","REJECTED"].includes(status);
       if (!isAns && !isAbn && !isFail) continue;
+      if (rtqCol && (num(r[rtqCol]) > 0 || String(r[rtqCol]).trim().toLowerCase() === "true")) rtqCalls++;
       const agentRaw = fromCol ? String(r[fromCol] ?? "Unassigned") : "All agents";
       const ext = /<([0-9]{3,6})>/.exec(agentRaw)?.[1] ?? "";
       const agent = agentRaw.replace(/<\d{3,6}>/,"").trim() || agentRaw;
