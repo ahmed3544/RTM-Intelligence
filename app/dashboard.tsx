@@ -387,7 +387,6 @@ export default function Home() {
       const friendly: Record<string,string> = {
         "auth/unauthorized-domain": "This website is not authorized in Firebase. Add rtm-intelligence-flax.vercel.app under Authentication → Settings → Authorized domains.",
         "auth/operation-not-allowed": "Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.",
-        "auth/unauthorized-domain": "This website is not authorized in Firebase. Add rtm-intelligence-flax.vercel.app under Authentication → Settings → Authorized domains.",
         "auth/popup-blocked": "The browser blocked the Google sign-in popup. Allow popups for this website and try again.",
         "auth/popup-closed-by-user": "The Google sign-in window was closed before finishing. Try again.",
         "auth/cancelled-popup-request": "A previous Google sign-in popup is still active. Close it and try again.",
