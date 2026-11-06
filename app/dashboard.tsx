@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import OfficialRtm from "../components/official-rtm";
-import { GoogleAuthProvider, getRedirectResult, onAuthStateChanged, signInWithRedirect, signOut, type User } from "firebase/auth";
+import { browserLocalPersistence, GoogleAuthProvider, onAuthStateChanged, setPersistence, signInWithPopup, signOut, type User } from "firebase/auth";
 import { collection, deleteDoc, doc, getDocs, setDoc } from "firebase/firestore";
 import { deleteObject, getBytes, ref as storageRef, uploadBytes } from "firebase/storage";
 import { auth, db, storage } from "../lib/firebase";
@@ -195,19 +195,17 @@ export default function Home() {
   }, [datasets, storageReady]);
 
   useEffect(() => {
-    let active = true;
-    getRedirectResult(auth).then(result => {
-      if (active && result?.user) setNotice("Google sign-in completed. Loading your workspace…");
-    }).catch(error => {
-      const authError = error as { code?: string; message?: string };
-      if (active) setNotice("Google sign-in could not be completed: " + (authError.message || authError.code || "Unknown error"));
-    }).finally(() => { if (active) setAuthBusy(false); });
     const unsubscribe = onAuthStateChanged(auth, nextUser => {
       setUser(nextUser);
       setAuthReady(true);
       if (nextUser) setAuthBusy(false);
+    }, error => {
+      console.error("Firebase auth state failed:", error);
+      setNotice("Could not restore your Google sign-in session: " + (error.message || error.code));
+      setAuthReady(true);
+      setAuthBusy(false);
     });
-    return () => { active = false; unsubscribe(); };
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -390,11 +388,16 @@ export default function Home() {
   async function loginWithGoogle() {
     if (authBusy) return;
     setAuthBusy(true);
-    setNotice("Connecting to Google…");
+    setNotice("Opening secure Google sign-in…");
     try {
+      // Popup auth avoids the cross-site redirect/sessionStorage state loss
+      // reported by browsers that partition storage between Vercel and Firebase.
+      await setPersistence(auth, browserLocalPersistence);
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithRedirect(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      setUser(result.user);
+      setNotice("Google sign-in successful. Loading your workspace…");
     } catch (error) {
       console.error("Google sign-in failed:", error);
       const authError = error as { code?: string; message?: string };
@@ -406,9 +409,12 @@ export default function Home() {
         "auth/popup-closed-by-user": "The Google sign-in window was closed before finishing. Try again.",
         "auth/cancelled-popup-request": "A previous Google sign-in popup is still active. Close it and try again.",
         "auth/network-request-failed": "Network request failed. Check your internet connection or browser extensions and try again.",
-        "auth/invalid-api-key": "The Firebase API key is invalid. Check the Firebase web app configuration."
+        "auth/invalid-api-key": "The Firebase API key is invalid. Check the Firebase web app configuration.",
+        "auth/web-storage-unsupported": "This browser does not support the storage needed for sign-in. Try the latest version of Chrome.",
+        "auth/operation-not-supported-in-this-environment": "Google popup sign-in is unavailable in this browser environment. Open the site directly in Chrome."
       };
       setNotice((friendly[code] || "Google sign-in failed: " + (authError?.message || "Unknown Firebase error")) + " [" + code + "]");
+    } finally {
       setAuthBusy(false);
     }
   }
