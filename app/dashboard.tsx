@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import OfficialRtm from "../components/official-rtm";
-import { GoogleAuthProvider, onAuthStateChanged, signInWithRedirect, signOut, type User } from "firebase/auth";
+import { GoogleAuthProvider, getRedirectResult, onAuthStateChanged, signInWithRedirect, signOut, type User } from "firebase/auth";
 import { collection, deleteDoc, doc, getDocs, setDoc } from "firebase/firestore";
 import { deleteObject, getBytes, ref as storageRef, uploadBytes } from "firebase/storage";
 import { auth, db, storage } from "../lib/firebase";
@@ -171,6 +171,7 @@ export default function Home() {
   const [dark, setDark] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
   const [cloudBusy, setCloudBusy] = useState(false);
 
   useEffect(() => {
@@ -193,10 +194,21 @@ export default function Home() {
     saveDatasetsLocally(datasets).catch(() => setNotice("Could not save data locally. Check browser storage permissions or available space."));
   }, [datasets, storageReady]);
 
-  useEffect(() => onAuthStateChanged(auth, nextUser => {
-    setUser(nextUser);
-    setAuthReady(true);
-  }), []);
+  useEffect(() => {
+    let active = true;
+    getRedirectResult(auth).then(result => {
+      if (active && result?.user) setNotice("Google sign-in completed. Loading your workspace…");
+    }).catch(error => {
+      const authError = error as { code?: string; message?: string };
+      if (active) setNotice("Google sign-in could not be completed: " + (authError.message || authError.code || "Unknown error"));
+    }).finally(() => { if (active) setAuthBusy(false); });
+    const unsubscribe = onAuthStateChanged(auth, nextUser => {
+      setUser(nextUser);
+      setAuthReady(true);
+      if (nextUser) setAuthBusy(false);
+    });
+    return () => { active = false; unsubscribe(); };
+  }, []);
 
   useEffect(() => {
     if (!authReady || !user || !storageReady) return;
@@ -376,6 +388,9 @@ export default function Home() {
   }
 
   async function loginWithGoogle() {
+    if (authBusy) return;
+    setAuthBusy(true);
+    setNotice("Connecting to Google…");
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
@@ -394,12 +409,13 @@ export default function Home() {
         "auth/invalid-api-key": "The Firebase API key is invalid. Check the Firebase web app configuration."
       };
       setNotice((friendly[code] || "Google sign-in failed: " + (authError?.message || "Unknown Firebase error")) + " [" + code + "]");
+      setAuthBusy(false);
     }
   }
 
   const title = section;
   if (!authReady) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><h1>RTM Intelligence</h1><p>Connecting to your secure cloud workspace…</p></section></main>;
-  if (!user) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><span className="eyebrow">CLOUD WORKSPACE</span><h1>RTM Intelligence</h1><p>Sign in to securely access your uploaded reports from any device.</p><button className="primary auth-button" onClick={loginWithGoogle}><ArrowUpRight size={16}/> Continue with Google</button><small>Your files are private to your Google account.</small></section></main>;
+  if (!user) return <main className="auth-screen"><section className="auth-card"><div className="brand-mark"><Activity size={22}/></div><span className="eyebrow">CLOUD WORKSPACE</span><h1>RTM Intelligence</h1><p>Sign in to securely access your uploaded reports from any device.</p><button className="primary auth-button" type="button" onClick={loginWithGoogle} disabled={authBusy}><ArrowUpRight size={16}/> {authBusy ? "Connecting to Google…" : "Continue with Google"}</button><small>Your files are private to your Google account.</small></section></main>;
   return (
     <main className={dark ? "shell dark-mode" : "shell"}>
       <aside className="sidebar">
