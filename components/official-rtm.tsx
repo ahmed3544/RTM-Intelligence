@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Users } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Users } from "lucide-react";
 
 type DataRow = Record<string, string | number | boolean | null>;
 type DataSet = { id: string; name: string; sheet: string; rows: DataRow[]; columns: string[] };
@@ -33,7 +33,7 @@ export default function OfficialRtm({ datasets }: { datasets: DataSet[] }) {
   const [slaThreshold, setSlaThreshold] = useState(20);
   const [shortThreshold, setShortThreshold] = useState(10);
   const sources = useMemo(() => {
-    const cdr = datasets.find(d => d.rows[0] && ("laststatus" in Object.fromEntries(Object.keys(d.rows[0]).map(k=>[norm(k),true])) || col(d.rows,[/^(laststatus|status)$/])));
+    const cdr = datasets.find(d => d.rows[0] && col(d.rows,[/^laststatus$/,/^status$/]));
     const login = datasets.find(d => d.rows[0] && col(d.rows,[/totallogintime/,/loginseconds/,/^logintime$/]));
     const pause = datasets.find(d => d.rows[0] && col(d.rows,[/totalpausetime/,/pausetime/]));
     return { cdr, login, pause };
