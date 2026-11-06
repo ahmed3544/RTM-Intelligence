@@ -10,6 +10,7 @@ type Message = { role: "assistant" | "user"; text: string };
 
 const nav = [
   { label: "Overview", icon: LayoutDashboard },
+  { label: "RTM Dashboard", icon: Activity },
   { label: "Data uploads", icon: Files },
   { label: "AI assistant", icon: Bot },
   { label: "Reports history", icon: Clock3 },
@@ -25,6 +26,59 @@ const numberValue = (v: unknown) => {
   return null;
 };
 const safeName = (v: unknown) => String(v ?? "").trim();
+
+const norm = (v: unknown) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const findColumn = (columns: string[], patterns: RegExp[]) => columns.find(c => patterns.some(p => p.test(norm(c))));
+const durationSeconds = (v: unknown): number | null => {
+  if (typeof v === "number" && Number.isFinite(v)) return v > 0 && v < 1 ? v * 86400 : v;
+  if (typeof v !== "string" || !v.trim()) return null;
+  const value = v.trim();
+  if (/^\d+(\.\d+)?$/.test(value)) return Number(value);
+  const parts = value.split(":").map(Number);
+  if (parts.length === 3 && parts.every(Number.isFinite)) return parts[0]*3600 + parts[1]*60 + parts[2];
+  if (parts.length === 2 && parts.every(Number.isFinite)) return parts[0]*60 + parts[1];
+  return null;
+};
+type AgentMetric = { agent: string; calls: number; answered: number; seconds: number; aht: number | null };
+function calculateRtm(data: Dataset | undefined) {
+  if (!data) return null;
+  const cols = data.columns;
+  const agentCol = findColumn(cols, [/^(agent|agentname|agentfullname|username|user|employee|employeename|extension|owner)$/,/agentname/,/employeename/]);
+  const durationCol = findColumn(cols, [/^(duration|callduration|talktime|handlingtime|totalduration|conversationduration|ahtseconds|durationseconds)$/,/callduration/,/talktime/,/handlingtime/,/durationsec/]);
+  const statusCol = findColumn(cols, [/^(status|disposition|callstatus|result|callresult|finalstatus)$/,/disposition/,/callstatus/]);
+  const answeredCountCol = findColumn(cols, [/^(answered|answeredcalls|connectedcalls|handledcalls)$/]);
+  const callCountCol = findColumn(cols, [/^(calls|totalcalls|callcount|offeredcalls)$/]);
+  const durationRows = data.rows.map(row => durationCol ? durationSeconds(row[durationCol]) : null);
+  const hasDuration = durationRows.some(v => v !== null);
+  const isAnswered = (row: Row, i: number) => {
+    if (answeredCountCol) return (numberValue(row[answeredCountCol]) ?? 0) > 0;
+    if (statusCol) return /answer|connect|complete|handled|success/i.test(String(row[statusCol] ?? ""));
+    return durationRows[i] !== null && (durationRows[i] ?? 0) > 0;
+  };
+  const calls = callCountCol ? data.rows.reduce((n,r)=>n+(numberValue(r[callCountCol]) ?? 0),0) : data.rows.length;
+  const answered = data.rows.reduce((n,r,i)=>n+(isAnswered(r,i) ? (answeredCountCol ? numberValue(r[answeredCountCol]) ?? 0 : 1) : 0),0);
+  const seconds = durationRows.reduce((n,v)=>n+(v ?? 0),0);
+  const grouped = new Map<string, AgentMetric>();
+  data.rows.forEach((row,i) => {
+    const agent = agentCol ? safeName(row[agentCol]) || "Unassigned" : "All agents";
+    const item = grouped.get(agent) ?? {agent,calls:0,answered:0,seconds:0,aht:null};
+    item.calls += callCountCol ? numberValue(row[callCountCol]) ?? 0 : 1;
+    if (isAnswered(row,i)) item.answered += answeredCountCol ? numberValue(row[answeredCountCol]) ?? 0 : 1;
+    item.seconds += durationRows[i] ?? 0;
+    grouped.set(agent,item);
+  });
+  const agents = [...grouped.values()].map(a=>({...a,aht:a.answered ? a.seconds/a.answered : null})).sort((a,b)=>b.calls-a.calls);
+  const extra = [
+    ["Adherence", [/adherence/]], ["Utilization", [/utilization/]], ["Occupancy", [/occupancy/]],
+    ["Conformance", [/conformance/]], ["Absenteeism", [/absenteeism/]], ["TTT", [/^ttt$/, /total talk time/]]
+  ].map(([label, patterns]) => {
+    const c = findColumn(cols, patterns as RegExp[]);
+    const vals = c ? data.rows.map(r=>numberValue(r[c])).filter((v):v is number=>v!==null) : [];
+    return {label:String(label), value:vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null, column:c};
+  });
+  return {calls,answered,seconds,aht:answered && hasDuration ? seconds/answered : null,agents,agentCol,durationCol,statusCol,hasDuration,extra};
+}
+
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -43,6 +97,7 @@ export default function Home() {
   const [dark, setDark] = useState(false);
 
   const totalRows = datasets.reduce((n, d) => n + d.rows.length, 0);
+  const rtm = useMemo(() => calculateRtm(current), [current]);
   const filteredRows = useMemo(() => {
     if (!current) return [];
     const q = search.toLowerCase().trim();
@@ -116,6 +171,15 @@ export default function Home() {
     if (!current) { setMessages(prev => [...prev, {role:"assistant",text:"Please upload an Excel or CSV file first. I can only calculate from data loaded in this session."}]); return; }
     const lower = q.toLowerCase();
     let answer = "";
+    if (/\baht\b|average handling time|handling time average/i.test(lower)) {
+      const calc = calculateRtm(current);
+      if (calc?.aht !== null && calc?.aht !== undefined) {
+        const secs = Math.round(calc.aht);
+        answer = `AHT = total call duration ÷ answered calls = ${calc.seconds.toLocaleString(undefined,{maximumFractionDigits:0})} seconds ÷ ${calc.answered.toLocaleString()} answered calls = ${Math.floor(secs/60)}m ${String(secs%60).padStart(2,"0")}s (${secs} seconds).`;
+      } else answer = `I couldn't calculate AHT reliably. I detected duration column: ${calc?.durationCol ?? "not found"}; answered/status column: ${calc?.statusCol ?? "not found"}. Please check the column names or upload the CDR export.`;
+      setMessages(prev => [...prev, {role:"assistant",text:answer}]);
+      return;
+    }
     const metric = current.columns.find(c => lower.includes(c.toLowerCase())) ||
       current.columns.find(c => /(aht|adherence|utilization|occupancy|calls|call count|duration|talk time|login|aux|late|absent|conformance|ttt)/i.test(c) && lower.split(/\s+/).some(w => w.length > 2 && c.toLowerCase().includes(w)));
     if (/how many|number of|count|rows|records/i.test(lower)) answer = `The selected sheet contains ${current.rows.length.toLocaleString()} data rows and ${current.columns.length} columns.`;
@@ -168,6 +232,26 @@ export default function Home() {
             <section className="panel assistant-panel"><div className="panel-heading"><div><h3>Reporting assistant</h3><p>Ask questions about your uploaded data.</p></div><span className="ai-pill"><Sparkles size={13}/> ANALYTICS</span></div><div className="chat-preview"><div className="bot-avatar"><Bot size={18}/></div><div className="chat-bubble"><strong>What would you like to analyze?</strong><p>Try “How many rows?”, “Average AHT”, or “List columns”.</p></div></div><button className="secondary full" onClick={()=>setSection("AI assistant")}>Open assistant <ArrowUpRight size={16}/></button></section>
           </div>
         </>}
+
+
+        {section==="RTM Dashboard" && <section className="panel">
+          <div className="panel-heading"><div><h3>RTM performance dashboard</h3><p>Automatic calculations from the selected sheet. Select the CDR export to calculate call metrics.</p></div><button className="secondary" onClick={()=>setSection("Data uploads")}>Choose dataset</button></div>
+          {!current || !rtm ? <div className="empty-state"><Activity size={32}/><b>Upload your RTM exports</b><span>Start with the CDR file, then select the relevant sheet.</span><button className="primary" onClick={()=>inputRef.current?.click()}>Upload files</button></div> : <>
+            <div className="active-data"><Table2 size={16}/>Analyzing {current.name} / {current.sheet} · {current.rows.length.toLocaleString()} records</div>
+            <div className="stats">
+              <article className="stat-card"><div className="stat-icon blue"><Files size={19}/></div><span>Total calls</span><strong>{rtm.calls.toLocaleString()}</strong><small>{current.rows.length.toLocaleString()} source rows</small></article>
+              <article className="stat-card"><div className="stat-icon green"><CheckCircle2 size={19}/></div><span>Answered calls</span><strong>{rtm.answered.toLocaleString()}</strong><small>{rtm.calls ? (rtm.answered/rtm.calls*100).toFixed(1)+"% answer rate" : "No calls detected"}</small></article>
+              <article className="stat-card"><div className="stat-icon violet"><Clock3 size={19}/></div><span>Average handling time</span><strong>{rtm.aht===null ? "—" : Math.floor(rtm.aht/60)+"m "+String(Math.round(rtm.aht)%60).padStart(2,"0")+"s"}</strong><small>{rtm.aht===null ? "Duration / answered calls unavailable" : Math.round(rtm.aht)+" seconds per answered call"}</small></article>
+              <article className="stat-card"><div className="stat-icon blue"><Activity size={19}/></div><span>Total call duration</span><strong>{Math.floor(rtm.seconds/3600)}h {Math.floor(rtm.seconds%3600/60)}m</strong><small>{Math.round(rtm.seconds).toLocaleString()} seconds</small></article>
+            </div>
+            <div className="settings-note"><AlertCircle size={16}/>Detected fields — Agent: {rtm.agentCol ?? "not detected"} · Duration: {rtm.durationCol ?? "not detected"} · Status: {rtm.statusCol ?? "not detected"}. AHT uses total detected duration divided by answered calls. Verify these mappings before relying on the result.</div>
+            <div className="panel-heading"><div><h3>Agent performance</h3><p>Calls, answered calls, total duration and AHT by agent.</p></div></div>
+            <div className="table-wrap"><table><thead><tr><th>Agent</th><th>Calls</th><th>Answered</th><th>Total duration</th><th>AHT</th></tr></thead><tbody>{rtm.agents.map(a=><tr key={a.agent}><td>{a.agent}</td><td>{a.calls.toLocaleString()}</td><td>{a.answered.toLocaleString()}</td><td>{Math.floor(a.seconds/60)}m {Math.round(a.seconds%60)}s</td><td>{a.aht===null?"—":Math.floor(a.aht/60)+"m "+String(Math.round(a.aht)%60).padStart(2,"0")+"s"}</td></tr>)}</tbody></table></div>
+            <div className="panel-heading"><div><h3>Additional available KPIs</h3><p>Only shown when a matching numeric column exists in this sheet.</p></div></div>
+            <div className="stats">{rtm.extra.filter(x=>x.value!==null).map(x=><article className="stat-card" key={x.label}><span>{x.label}</span><strong>{x.value!.toLocaleString(undefined,{maximumFractionDigits:2})}{/adherence|utilization|occupancy|absenteeism|conformance/i.test(x.label)?"%":""}</strong><small>Average of {x.column}</small></article>)}</div>
+            <div className="settings-note"><AlertCircle size={16}/>This dashboard calculates only metrics supported by the selected file. Attendance, pause breakdown, adherence and conformance require their corresponding YASTER exports and shift schedule rules.</div>
+          </>}
+        </section>}
 
         {section==="Data uploads" && <section className="panel">
           <div className="panel-heading"><div><h3>Data workspace</h3><p>Import files, choose a sheet, and inspect your data.</p></div><button className="primary" onClick={()=>inputRef.current?.click()}><UploadCloud size={16}/> Upload files</button></div>
