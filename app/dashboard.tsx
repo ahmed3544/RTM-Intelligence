@@ -32,6 +32,17 @@ const numberValue = (v: unknown) => {
   return null;
 };
 const safeName = (v: unknown) => String(v ?? "").trim();
+const findHeaderRow = (matrix: unknown[][]): number => {
+  const known = new Set(["agent","loggedin","loggedout","totallogintime","pause","pausereason","unpause","totalpausetime","totalpauses","laststatus","handlingduration","routingduration","callfrom","callduration","id","cdrid"]);
+  let bestIndex = matrix.findIndex(row => row.some(cell => safeName(cell) !== ""));
+  let bestScore = 0;
+  matrix.slice(0, 25).forEach((row, index) => {
+    const values = row.map(cell => safeName(cell).toLowerCase().replace(/[^a-z0-9]/g, ""));
+    const score = values.filter(value => known.has(value)).length;
+    if (score > bestScore) { bestScore = score; bestIndex = index; }
+  });
+  return bestIndex;
+};
 
 const DB_NAME = "rtm-intelligence-local";
 const DB_STORE = "datasets";
@@ -253,7 +264,7 @@ export default function Home() {
           const sheet = workbook.Sheets[sheetName];
           const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: true });
           if (!matrix.length) continue;
-          const headerRowIndex = matrix.findIndex(row => row.some(cell => safeName(cell) !== ""));
+          const headerRowIndex = findHeaderRow(matrix);
           if (headerRowIndex < 0) continue;
           const rawHeaders = matrix[headerRowIndex].map((v, i) => safeName(v) || `Column ${i + 1}`);
           const headers = rawHeaders.map((h, i) => rawHeaders.indexOf(h) === i ? h : `${h} (${i + 1})`);
