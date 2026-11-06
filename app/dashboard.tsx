@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 import OfficialRtm from "../components/official-rtm";
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithRedirect, signOut, type User } from "firebase/auth";
 import { collection, deleteDoc, doc, getDocs, setDoc } from "firebase/firestore";
 import { deleteObject, getBytes, ref as storageRef, uploadBytes } from "firebase/storage";
 import { auth, db, storage } from "../lib/firebase";
@@ -379,7 +379,7 @@ export default function Home() {
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: "select_account" });
-      await signInWithPopup(auth, provider);
+      await signInWithRedirect(auth, provider);
     } catch (error) {
       console.error("Google sign-in failed:", error);
       const authError = error as { code?: string; message?: string };
@@ -387,6 +387,7 @@ export default function Home() {
       const friendly: Record<string,string> = {
         "auth/unauthorized-domain": "This website is not authorized in Firebase. Add rtm-intelligence-flax.vercel.app under Authentication → Settings → Authorized domains.",
         "auth/operation-not-allowed": "Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.",
+        "auth/unauthorized-domain": "This website is not authorized in Firebase. Add rtm-intelligence-flax.vercel.app under Authentication → Settings → Authorized domains.",
         "auth/popup-blocked": "The browser blocked the Google sign-in popup. Allow popups for this website and try again.",
         "auth/popup-closed-by-user": "The Google sign-in window was closed before finishing. Try again.",
         "auth/cancelled-popup-request": "A previous Google sign-in popup is still active. Close it and try again.",
