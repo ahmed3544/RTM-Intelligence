@@ -49,9 +49,10 @@ export default function OfficialRtm({ datasets }: { datasets: DataSet[] }) {
     const routingCol = col(cdrRows,[/^routingduration$/,/^waittime$/]);
     const idCol = col(cdrRows,[/^id$/,/^cdrid$/]);
     const holdCol = col(cdrRows,[/^holdtime$/,/^holdduration$/]);
+    const rtqCol = col(cdrRows,[/^rtqcalls?$/,/^rtq$/]);
     const fromCol = col(cdrRows,[/^callfrom$/,/^caller$/,/^agent$/]);
     const seen = new Set<string>();
-    let duplicates = 0, answered = 0, abandoned = 0, failed = 0, talk = 0, hold = 0, waiting = 0, sla = 0, short = 0;
+    let duplicates = 0, answered = 0, abandoned = 0, failed = 0, talk = 0, hold = 0, waiting = 0, sla = 0, short = 0, rtqCalls = 0;
     const agentMap = new Map<string,{agent:string;offered:number;answered:number;tht:number}>();
     for (const r of cdrRows) {
       const id = idCol ? String(r[idCol] ?? "").trim() : "";
@@ -94,8 +95,8 @@ export default function OfficialRtm({ datasets }: { datasets: DataSet[] }) {
     const tht = talk + hold + follow;
     const available = login > 0 ? Math.max(0,login-tht-aux) : null;
     const entries = [
-      ["Offered Calls",offered,"count"],["Answered Calls",answered,"count"],["Abandoned Calls",abandoned,"count"],["Terminated / Failed Calls",failed,"count"],
-      ["Abandonment Rate",offered ? abandoned/offered*100 : null,"%"],["RTQ",offered ? abandoned/offered*100 : null,"%"],
+      ["Offered Calls",offered,"count"],["Answered Calls",answered,"count"],["Abandoned Calls",abandoned,"count"],["Terminated Calls (Failed / No Answer / Busy)",failed,"count"],
+      ["Abandonment Rate",offered ? abandoned/offered*100 : null,"%"],["RTQ",rtqCol && offered ? rtqCalls/offered*100 : null,"%"],
       ["Workload",offered && answered ? offered*(tht/answered)/60 : null,"min"],["THT",tht,"sec"],["AHT",answered ? tht/answered : null,"sec"],
       ["SLA",offered && routingCol ? sla/offered*100 : null,"%"],["PCA",offered ? answered/offered*100 : null,"%"],
       ["ASA",answered && routingCol ? waiting/answered : null,"sec"],["Short Calls",answered ? short/answered*100 : null,"%"],
@@ -104,7 +105,7 @@ export default function OfficialRtm({ datasets }: { datasets: DataSet[] }) {
       ["Occupancy",available !== null && tht+available>0 ? tht/(tht+available)*100 : null,"%"],
       ["Utilization",available !== null && login>0 ? (tht+available)/login*100 : null,"%"],
     ] as [string,number|null,string][];
-    return {entries, agents:[...agentMap.values()].sort((a,b)=>b.offered-a.offered), offered, answered, abandoned, failed, duplicates, tht, login, aux, follow, cdrName:sources.cdr?.name, loginName:sources.login?.name, pauseName:sources.pause?.name, missing:{login:!loginCol,pause:!pauseTimeCol,routing:!routingCol}};
+    return {entries, agents:[...agentMap.values()].sort((a,b)=>b.offered-a.offered), offered, answered, abandoned, failed, duplicates, tht, login, aux, follow, rtqAvailable:!!rtqCol, cdrName:sources.cdr?.name, loginName:sources.login?.name, pauseName:sources.pause?.name, missing:{login:!loginCol,pause:!pauseTimeCol,routing:!routingCol}};
   }, [sources,slaThreshold,shortThreshold]);
 
   const cards = result?.entries ?? [];
