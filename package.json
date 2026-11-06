@@ -1,0 +1,28 @@
+{
+  "name": "rtm-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "next": "15.5.6",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "lucide-react": "0.468.0",
+    "xlsx": "0.18.5",
+    "recharts": "2.15.0",
+    "papaparse": "5.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/react": "19.0.3",
+    "@types/react-dom": "19.0.2",
+    "eslint": "9.17.0",
+    "eslint-config-next": "15.5.6",
+    "typescript": "5.7.2"
+  }
+}
