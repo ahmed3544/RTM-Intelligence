@@ -92,7 +92,7 @@ const sameScope = (r: {agentId?:string|null;teamId?:string|null;projectId?:strin
 };
 const minsSinceMidnight = (s: string | null | undefined) => {
   if (!s) return null;
-  const m = /^(\\d{1,2}):(\\d{2})(?::(\\d{2}))?$/.exec(s.trim());
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s.trim());
   return m ? Number(m[1]) * 60 + Number(m[2]) / 1 + Number(m[3] ?? 0) / 60 : null;
 };
 const targetValue = (id: KpiId, value: number | null, targets?: Partial<Record<KpiId,KpiTarget>>) => {
@@ -182,7 +182,7 @@ export function calculateRtmKpis(input: EngineInput): EngineResult {
     {id:"aht",label:"AHT",value:tht===null?null:div(tht,answered),unit:"seconds",formula:"Total Handling Time / Total Answered Calls",source:"Aggregated THT / aggregated answered calls"},
     {id:"ahlt",label:"AHLT",value:answeredRows.every(c=>validSeconds(c.holdSeconds)!==null)?div(hold,answered):null,unit:"seconds",formula:"Total Hold Time / Total Answered Calls",source:"Answered CDR rows: Hold Time"},
     {id:"shortCallsRate",label:"Short Calls %",value:uniqueCalls.some(c=>typeof c.shortCall==="boolean")?pct(short,answered):null,unit:"percent",formula:"(Short Calls Answered / Total Answered Calls) * 100",source:"Answered CDR short-call flag"},
-    {id:"sla",label:"Service Level %",value:pct(statusCounts.answeredWithin,offered),unit:"percent",formula:"(Calls Answered Within Threshold / Total Offered Calls) * 100",source:"CDR answered-within-threshold category"},
+    {id:"sla",label:"Service Level %",value:allWaitingAvailable?pct(statusCounts.answeredWithin,offered):null,unit:"percent",formula:"(Calls Answered Within Threshold / Total Offered Calls) * 100",source:"CDR answered-within-threshold category"},
     {id:"pca",label:"PCA %",value:pct(answered,offered),unit:"percent",formula:"(Total Answered Calls / Total Offered Calls) * 100",source:"Answered CDR categories / offered calls"},
     {id:"asa",label:"ASA",value:allWaitingAvailable?div(waiting,answered):null,unit:"seconds",formula:"Total Waiting Time for Answered Calls / Total Answered Calls",source:"Answered CDR rows: Routing / Waiting Time"},
     {id:"occupancy",label:"Occupancy %",value:tht!==null&&available!==null?pct(tht,tht+available):null,unit:"percent",formula:"(Total Handling Time / (Total Handling Time + Available Time)) * 100",source:"CDR THT + agent available-time records"},
