@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
+import OfficialRtm from "../components/official-rtm";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import { collection, deleteDoc, doc, getDocs, setDoc } from "firebase/firestore";
 import { deleteObject, getBytes, ref as storageRef, uploadBytes } from "firebase/storage";
@@ -15,6 +16,7 @@ type Message = { role: "assistant" | "user"; text: string };
 const nav = [
   { label: "Overview", icon: LayoutDashboard },
   { label: "RTM Dashboard", icon: Activity },
+  { label: "Official KPI Engine", icon: Activity },
   { label: "Data uploads", icon: Files },
   { label: "AI assistant", icon: Bot },
   { label: "Reports history", icon: Clock3 },
@@ -403,6 +405,8 @@ export default function Home() {
           </div>
         </>}
 
+
+        {section==="Official KPI Engine" && <OfficialRtm datasets={datasets} />}
 
         {section==="RTM Dashboard" && <section className="panel">
           <div className="panel-heading"><div><h3>RTM performance dashboard</h3><p>Automatic calculations from the selected sheet. Select the CDR export to calculate call metrics.</p></div><button className="secondary" onClick={()=>setSection("Data uploads")}>Choose dataset</button></div>
