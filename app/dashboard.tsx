@@ -117,7 +117,7 @@ function calculateRtm(data: Dataset | undefined) {
   };
   const calls = callCountCol ? data.rows.reduce((n,r)=>n+(numberValue(r[callCountCol]) ?? 0),0) : data.rows.length;
   const answered = data.rows.reduce((n,r,i)=>n+(isAnswered(r,i) ? (answeredCountCol ? numberValue(r[answeredCountCol]) ?? 0 : 1) : 0),0);
-  const seconds = durationRows.reduce((n,v,i)=>n+(isAnswered(data.rows[i],i) ? (v ?? 0) : 0),0);
+  const seconds = durationRows.reduce<number>((n,v,i)=>n+(isAnswered(data.rows[i],i) ? (v ?? 0) : 0),0);
   const grouped = new Map<string, AgentMetric>();
   data.rows.forEach((row,i) => {
     const agent = agentCol ? safeName(row[agentCol]) || "Unassigned" : "All agents";
