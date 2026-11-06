@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Bot, FileSpreadsheet, Files, LayoutDashboard, Settings2, Sparkles, UploadCloud, Clock3, Search, Download, Trash2, FileText, Send, Table2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -26,6 +26,43 @@ const numberValue = (v: unknown) => {
   return null;
 };
 const safeName = (v: unknown) => String(v ?? "").trim();
+
+const DB_NAME = "rtm-intelligence-local";
+const DB_STORE = "datasets";
+function openLocalDb(): Promise<IDBDatabase> {
+  return new Promise((resolve,reject) => {
+    const request = indexedDB.open(DB_NAME,1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE,{keyPath:"id"});
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function readSavedDatasets(): Promise<Dataset[]> {
+  const db = await openLocalDb();
+  return new Promise((resolve,reject) => {
+    const tx = db.transaction(DB_STORE,"readonly");
+    const request = tx.objectStore(DB_STORE).getAll();
+    request.onsuccess = () => resolve(request.result as Dataset[]);
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+async function saveDatasetsLocally(items: Dataset[]) {
+  const db = await openLocalDb();
+  return new Promise<void>((resolve,reject) => {
+    const tx = db.transaction(DB_STORE,"readwrite");
+    const store = tx.objectStore(DB_STORE);
+    store.clear();
+    items.forEach(item=>store.put(item));
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+    tx.onabort = () => { db.close(); reject(tx.error); };
+  });
+}
+
 
 const norm = (v: unknown) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const findColumn = (columns: string[], patterns: RegExp[]) => columns.find(c => patterns.some(p => p.test(norm(c))));
@@ -84,6 +121,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState("Overview");
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [storageReady, setStorageReady] = useState(false);
   const [selected, setSelected] = useState("");
   const [sheetIndex, setSheetIndex] = useState(0);
   const [search, setSearch] = useState("");
@@ -95,6 +133,27 @@ export default function Home() {
   const current = datasets.find(d => d.id === selected) ?? datasets[0];
   const [previewPage, setPreviewPage] = useState(0);
   const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    readSavedDatasets().then(saved => {
+      if (!active) return;
+      if (saved.length) {
+        setDatasets(saved);
+        setSelected(saved[0].id);
+        setNotice(`Restored ${saved.length} saved sheet(s) from this browser.`);
+      }
+    }).catch(() => {
+      if (active) setNotice("Local saved data could not be loaded in this browser.");
+    }).finally(() => { if (active) setStorageReady(true); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    saveDatasetsLocally(datasets).catch(() => setNotice("Could not save data locally. Check browser storage permissions or available space."));
+  }, [datasets, storageReady]);
+
 
   const totalRows = datasets.reduce((n, d) => n + d.rows.length, 0);
   const rtm = useMemo(() => calculateRtm(current), [current]);
@@ -139,7 +198,7 @@ export default function Home() {
         setSelected(added[0].id);
         setSection("Data uploads");
         setPreviewPage(0);
-        setNotice(`Imported ${added.length} sheet(s) successfully. Data is available in this browser session.`);
+        setNotice(`Imported ${added.length} sheet(s) successfully. Data is saved in this browser on this device.`);
       } else if (!notice) setNotice("No tabular data found. Make sure the first non-empty row contains column headers.");
     } catch (e) {
       setNotice("Could not read this file. Please check that it is a valid Excel or CSV workbook.");
@@ -223,12 +282,12 @@ export default function Home() {
         {section==="Overview" && <>
           <div className="welcome"><div><span className="eyebrow light">YOUR DATA. YOUR REPORTS.</span><h2>Turn spreadsheets into<br/><em>clear decisions.</em></h2><p>Upload your Excel files, explore the data, and ask for the report you need.</p><button className="primary" onClick={()=>inputRef.current?.click()}><UploadCloud size={16}/> Upload a workbook</button></div><div className="welcome-art"><div className="art-card"><FileSpreadsheet size={34}/><span>Excel data</span><ArrowUpRight size={17}/></div><div className="art-line"/></div></div>
           <div className="stats">
-            <article className="stat-card"><div className="stat-icon blue"><Files size={19}/></div><span>Uploaded sheets</span><strong>{datasets.length}</strong><small>In this browser session</small></article>
+            <article className="stat-card"><div className="stat-icon blue"><Files size={19}/></div><span>Uploaded sheets</span><strong>{datasets.length}</strong><small>Saved in this browser</small></article>
             <article className="stat-card"><div className="stat-icon green"><FileSpreadsheet size={19}/></div><span>Data rows analyzed</span><strong>{totalRows.toLocaleString()}</strong><small>Across uploaded sheets</small></article>
             <article className="stat-card"><div className="stat-icon violet"><Sparkles size={19}/></div><span>Reports generated</span><strong>{reports.length}</strong><small>Current session</small></article>
           </div>
           <div className="content-grid">
-            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? "Reading your file..." : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are processed locally in your browser.</small></div></section>
+            <section className="panel upload-panel"><div className="panel-heading"><div><h3>Upload your data</h3><p>Excel workbooks and CSV exports are supported.</p></div><span className="step">01</span></div><div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void handleFiles(e.dataTransfer.files);}}><div className="upload-icon"><UploadCloud size={25}/></div><strong>{busy ? "Reading your file..." : "Choose or drop files to get started"}</strong><span>Supported formats: .xlsx, .xls, .csv</span><button className="primary" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy ? "Processing..." : "Choose files"} <ArrowUpRight size={16}/></button><small>Files are saved in this browser on this device. Clearing browser site data will remove them.</small></div></section>
             <section className="panel assistant-panel"><div className="panel-heading"><div><h3>Reporting assistant</h3><p>Ask questions about your uploaded data.</p></div><span className="ai-pill"><Sparkles size={13}/> ANALYTICS</span></div><div className="chat-preview"><div className="bot-avatar"><Bot size={18}/></div><div className="chat-bubble"><strong>What would you like to analyze?</strong><p>Try “How many rows?”, “Average AHT”, or “List columns”.</p></div></div><button className="secondary full" onClick={()=>setSection("AI assistant")}>Open assistant <ArrowUpRight size={16}/></button></section>
           </div>
         </>}
@@ -268,9 +327,9 @@ export default function Home() {
 
         {section==="Reports history" && <section className="panel"><div className="panel-heading"><div><h3>Reports history</h3><p>Create a workbook export or print a report to PDF.</p></div><button className="primary" onClick={makeReport} disabled={!current}><FileText size={16}/> Generate summary</button></div>{reports.length ? <div className="report-list">{reports.map((r,i)=><div className="report-item" key={i}><div className="report-icon"><FileText size={18}/></div><div><b>{r.name}</b><small>{r.date} · {r.rows} rows</small></div><button className="secondary" onClick={()=>window.print()}>Print / Save PDF</button></div>)}</div> : <div className="empty-state"><Clock3 size={32}/><b>No reports generated</b><span>Choose a dataset, then generate a data summary.</span></div>}</section>}
 
-        {section==="Settings" && <section className="panel"><div className="panel-heading"><div><h3>Workspace settings</h3><p>Manage this browser workspace.</p></div></div><div className="settings-row"><div><b>Appearance</b><small>Switch between light and dark workspace.</small></div><button className="secondary" onClick={()=>setDark(v=>!v)}>{dark?"Use light mode":"Use dark mode"}</button></div><div className="settings-row"><div><b>Export all uploaded data</b><small>Download all imported sheets into one Excel workbook.</small></div><button className="secondary" disabled={!datasets.length} onClick={exportAll}><Download size={15}/> Export all</button></div><div className="settings-row"><div><b>Clear current session</b><small>Remove uploaded data and generated report history from this browser session.</small></div><button className="secondary danger-text" disabled={!datasets.length&&!reports.length} onClick={()=>{setDatasets([]);setSelected("");setReports([]);setMessages([{role:"assistant",text:"Session cleared. Upload a workbook to begin again."}]);setNotice("Current session cleared.");}}>Clear workspace</button></div><div className="settings-note"><AlertCircle size={16}/> Uploaded files are currently processed in memory and are not sent to a server. Refreshing or closing the tab clears the session. Account login, cloud storage, and connected generative AI are not configured yet.</div></section>}
+        {section==="Settings" && <section className="panel"><div className="panel-heading"><div><h3>Workspace settings</h3><p>Manage this browser workspace.</p></div></div><div className="settings-row"><div><b>Appearance</b><small>Switch between light and dark workspace.</small></div><button className="secondary" onClick={()=>setDark(v=>!v)}>{dark?"Use light mode":"Use dark mode"}</button></div><div className="settings-row"><div><b>Export all uploaded data</b><small>Download all imported sheets into one Excel workbook.</small></div><button className="secondary" disabled={!datasets.length} onClick={exportAll}><Download size={15}/> Export all</button></div><div className="settings-row"><div><b>Clear current session</b><small>Remove uploaded data and generated report history from this browser session.</small></div><button className="secondary danger-text" disabled={!datasets.length&&!reports.length} onClick={()=>{setDatasets([]);setSelected("");setReports([]);setMessages([{role:"assistant",text:"Session cleared. Upload a workbook to begin again."}]);setNotice("Current session cleared.");}}>Clear workspace</button></div><div className="settings-note"><AlertCircle size={16}/> Uploaded data is saved in this browser using local database storage and restored after refresh. It remains on this device only; clearing site data or using another device will not carry it over. Cloud backup and account login are not configured yet.</div></section>}
 
-        <footer>RTM Intelligence <span>Data is processed locally · English interface</span></footer>
+        <footer>RTM Intelligence <span>Data is saved locally on this device · English interface</span></footer>
       </section>
       <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" multiple hidden onChange={e=>{if(e.target.files)void handleFiles(e.target.files);}}/>
     </main>
